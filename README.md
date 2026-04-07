@@ -4,20 +4,20 @@
 
 # ApiPred
 
-**Predict fitness phenotypes and invasion machinery in apicomplexan proteomes from sequence alone.**
+**Predict fitness phenotypes, subcellular compartments, and invasion machinery in apicomplexan proteomes from sequence alone.**
 
-ApiPred uses ESM-2 protein language model embeddings to predict protein essentiality in tachyzoite culture, invasion compartment membership, and structural context for any apicomplexan species, trained on *Toxoplasma gondii* experimental data and validated across *Plasmodium berghei*.
+ApiPred uses ESM-2 protein language model embeddings to predict protein essentiality, subcellular localisation across 25 compartments, invasion machinery membership, and structural context for any apicomplexan species. Trained on *Toxoplasma gondii* experimental data (Sidik et al. 2016 CRISPR screen + Barylyuk et al. 2020 hyperLOPIT) and validated across *Plasmodium berghei*.
 
 ## How it works
 
 ```mermaid
 graph LR
     A[FASTA proteome] --> B[ESM-2 embedding<br>1,280 dims per protein]
-    B --> C[Essentiality model]
-    B --> D[Invasion model]
-    B --> E[Reference database]
-    C --> F[CRISPR fitness score<br>Essential / Important / Dispensable]
-    D --> G[Invasion probability<br>Compartment prediction]
+    B --> C[Essentiality ensemble<br>5-fold models]
+    B --> D[Compartment model<br>25-class]
+    B --> E[Reference database<br>2,634 proteins]
+    C --> F[CRISPR fitness score ± confidence<br>Essential / Important / Dispensable]
+    D --> G[Subcellular compartment<br>+ invasion probability]
     E --> H[Top 3 similar known proteins<br>Structural novelty flag]
 ```
 
@@ -25,12 +25,25 @@ graph LR
 
 | Metric | Value | Note |
 |--------|-------|------|
-| CRISPR score prediction (Spearman rho) | **0.56** | 5-fold CV, 3,796 T. gondii proteins |
+| CRISPR score prediction (Spearman rho) | **0.56** | 5-fold ensemble CV, 3,796 T. gondii proteins |
 | Fitness classification (ROC AUC) | **0.77** | Essential (CRISPR < -3) vs non-essential |
-| Invasion classification (ROC AUC) | **0.95** | 5-fold CV, 2,634 proteins with known compartments |
+| Invasion classification (ROC AUC) | **0.95** | Derived from 25-class compartment model |
+| Multi-compartment accuracy | **0.57** | 25 compartments (random baseline: 0.04) |
 | Cross-species fitness transfer (Spearman rho) | **0.31** | Tg-predicted scores vs Pb experimental growth rates |
 
-Note: the invasion AUC (0.95) is evaluated on 2,634 proteins with confident hyperLOPIT compartment assignments, excluding 1,198 proteins of unknown localisation. Including unknowns as negatives reduces AUC to 0.90.
+### Per-compartment classification (one-vs-rest AUC)
+
+| Compartment | AUC | n |
+|-------------|-----|---|
+| Rhoptries 1 | 0.980 | 57 |
+| Apical 2 | 0.971 | 16 |
+| Apical 1 | 0.962 | 47 |
+| Micronemes | 0.954 | 51 |
+| Dense granules | 0.939 | 124 |
+| Rhoptries 2 | 0.906 | 49 |
+| IMC | 0.901 | 81 |
+
+Note: invasion AUC evaluated on 2,625 proteins with confident hyperLOPIT compartment assignments, excluding 1,198 proteins of unknown localisation.
 
 ## Validation
 
@@ -52,16 +65,16 @@ python predict.py --input examples/test_pf.fasta --output predictions_pf.tsv
 
 **T. gondii example:**
 
-| Protein | Fitness | CRISPR Score | Invasion | Top Match | Compartment |
-|---------|---------|-------------|----------|-----------|-------------|
-| `TGME49_250340` | important | -2.49 | yes | centrin 2 | apical 2 |
-| `TGME49_243250` | important | -2.41 | no | myosin H | apical 2 |
-| `TGME49_226220` | important | -1.71 | yes | alveolin domain protein | IMC |
-| `TGME49_246930` | important | -1.63 | yes | calmodulin CAM1 | apical 2 |
-| `TGME49_300100` | dispensable | -0.61 | yes | RON2 | rhoptries 1 |
-| `TGME49_262730` | dispensable | 0.46 | yes | ROP16 | rhoptries 1 |
+| Protein | Fitness | CRISPR Score | Confidence | Compartment | Invasion | Top Match |
+|---------|---------|-------------|------------|-------------|----------|-----------|
+| `TGME49_250340` | important | -2.61 | high | apical 2 | yes | centrin 2 |
+| `TGME49_256030` | important | -1.87 | high | apical 1 | yes | DCX |
+| `TGME49_226220` | important | -1.60 | high | IMC | yes | alveolin IMC9 |
+| `TGME49_265790` | important | -1.33 | high | micronemes | yes | hypothetical |
+| `TGME49_300100` | dispensable | -0.40 | high | rhoptries 1 | yes | RON2 |
+| `TGME49_200010` | dispensable | 0.27 | high | dense granules | yes | hypothetical |
 
-Each protein also gets its top 3 structurally similar characterised proteins (with descriptions, compartments, and CRISPR scores) and a structural novelty flag.
+Each protein gets: predicted compartment (25-class), essentiality confidence (ensemble agreement across 5 folds), invasion probability (summed from invasion compartment scores), top 3 structurally similar characterised proteins, and a structural novelty flag.
 
 ## Installation
 
@@ -112,10 +125,14 @@ Generates three files in `models/`:
 | `description` | FASTA header description |
 | `length` | Protein length (aa) |
 | `predicted_crispr_score` | Predicted CRISPR fitness (more negative = more essential in culture) |
+| `score_std` | Standard deviation across 5 ensemble folds (lower = more confident) |
 | `essential_probability` | P(essential), where essential = CRISPR score < -3 |
 | `essentiality_class` | `essential` / `important` / `dispensable` |
-| `invasion_probability` | P(invasion compartment) |
-| `predicted_invasion` | `yes` / `no` |
+| `essentiality_confidence` | `high` (std < 0.5) / `medium` (std < 1.0) / `low` (std >= 1.0) |
+| `predicted_compartment` | Most likely subcellular compartment (25-class) |
+| `compartment_confidence` | Probability of predicted compartment (0-1) |
+| `invasion_probability` | Sum of invasion compartment probabilities |
+| `predicted_invasion` | `yes` / `no` (threshold: 0.5) |
 | `similar_1_id` | Most structurally similar characterised protein |
 | `similar_1_desc` | Its description |
 | `similar_1_compartment` | Its subcellular compartment |
@@ -128,9 +145,10 @@ Generates three files in `models/`:
 ## Training data
 
 - **Fitness labels:** Sidik et al. 2016, genome-wide CRISPR screen in T. gondii tachyzoites (3,796 proteins with scores)
-- **Invasion labels:** Barylyuk et al. 2020, hyperLOPIT spatial proteomics (425 invasion, 2,209 non-invasion, 1,198 unknown excluded)
-- **Embeddings:** ESM-2 (esm2_t33_650M_UR50D, 650M parameters)
-- **Models:** Gradient boosting (scikit-learn), 5-fold cross-validated
+- **Compartment labels:** Barylyuk et al. 2020, hyperLOPIT spatial proteomics (2,625 proteins across 25 compartments, 1,198 unknown excluded)
+- **Embeddings:** ESM-2 (esm2_t33_650M_UR50D, 650M parameters, 4-layer mean: layers 20, 24, 28, 33)
+- **Essentiality model:** 5-fold gradient boosting ensemble (predictions = mean across folds; confidence = std across folds)
+- **Compartment model:** Random forest (500 trees, 25-class)
 
 ## Limitations
 
