@@ -163,9 +163,9 @@ Generates three files in `models/`:
 
 If you use ApiPred, please cite:
 
-> McCabe, JS. (2026) Protein language model embeddings reveal the structural logic of apicomplexan host cell invasion. *In preparation.*
+> McCabe, JS. (2026) ApiPred: subcellular proteomics prediction for Apicomplexa using protein language model embeddings. https://github.com/jsmccabe1/ApiPred
 
-And the underlying methods:
+And the underlying data sources:
 - Lin Z et al. (2023) Evolutionary-scale prediction of atomic-level protein structure with a language model. *Science* 379:1123-1130.
 - Sidik SM et al. (2016) A genome-wide CRISPR screen in Toxoplasma identifies essential apicomplexan genes. *Cell* 167:1423-1435.
 - Barylyuk K et al. (2020) A comprehensive subcellular atlas of the Toxoplasma proteome via hyperLOPIT. *Cell Host & Microbe* 28:752-766.
