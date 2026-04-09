@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -5,3 +6,25 @@ __pycache__/
 dist/
 build/
 .eggs/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Generated outputs (examples/ stays tracked)
+*.tsv
+!examples/*.tsv
+*.npz
+!models/*.npz
+*.npy
+*.fasta
+!examples/*.fasta
+predictions/
+output/
+
+# Logs / scratch
+*.log
+scratch/
+tmp/
