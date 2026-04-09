@@ -71,7 +71,7 @@ python predict.py --input examples/test_pf.fasta --output predictions_pf.tsv
 | `TGME49_256030` | important | -1.87 | high | apical 1 | yes | DCX |
 | `TGME49_226220` | important | -1.60 | high | IMC | yes | alveolin IMC9 |
 | `TGME49_265790` | important | -1.33 | high | micronemes | yes | hypothetical |
-| `TGME49_300100` | dispensable | -0.40 | high | rhoptries 1 | yes | RON2 |
+| `TGME49_300100` | dispensable | -0.35 | high | rhoptries 1 | yes | RON2 |
 | `TGME49_200010` | dispensable | 0.27 | high | dense granules | yes | hypothetical |
 
 Each protein gets: predicted compartment (25-class), essentiality confidence (ensemble agreement across 5 folds), invasion probability (summed from invasion compartment scores), top 3 structurally similar characterised proteins, and a structural novelty flag.
@@ -155,7 +155,7 @@ Generates three files in `models/`:
 - Fitness predictions reflect tachyzoite culture conditions (Sidik et al. 2016); genes dispensable in vitro may be essential in vivo or in other life stages
 - Cross-species transfer validated for P. berghei blood stages only; accuracy on more distant species (Cryptosporidium, gregarines) is untested
 - ESM-2 context window is 1,022 tokens; longer proteins use sliding window mean-pooling
-- Structural context is relative to characterised T. gondii proteins; truly novel folds may not be detected
+- Structural context is computed against the *T. gondii* reference DB only, so the `structural_novelty` flag for cross-species predictions means "novel relative to characterised Toxoplasma proteins" rather than "novel in the apicomplexan proteome"
 - Invasion predictions trained on hyperLOPIT compartment labels; may be less accurate for non-Toxoplasma species
 - ESM-2 was trained on UniRef50 which includes apicomplexan proteins, so the embeddings aren't fully independent of the training labels
 
@@ -163,7 +163,7 @@ Generates three files in `models/`:
 
 If you use ApiPred, please cite:
 
-> McCabe, JS. (2026) ApiPred: subcellular proteomics prediction for Apicomplexa using protein language model embeddings. https://github.com/jsmccabe1/ApiPred
+> McCabe, JS. (2026) ApiPred: subcellular proteomics prediction for Apicomplexa using protein language model embeddings. https://github.com/jsmccabe1/apipred
 
 And the underlying data sources:
 - Lin Z et al. (2023) Evolutionary-scale prediction of atomic-level protein structure with a language model. *Science* 379:1123-1130.

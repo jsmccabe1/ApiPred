@@ -2,10 +2,9 @@
 """
 Train ApiPred models from T. gondii data.
 
-Generates four files in models/:
+Generates three files in models/:
   - essentiality_ensemble.joblib  (5-fold ensemble for scores + confidence)
   - compartment_model.joblib      (multi-class compartment classifier)
-  - invasion_model.joblib          (binary invasion classifier, legacy compat)
   - reference_db.npz               (embedding database for structural context)
 
 Usage:
@@ -27,8 +26,7 @@ from sklearn.ensemble import (GradientBoostingRegressor, GradientBoostingClassif
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import StratifiedKFold, KFold, cross_val_predict
-from sklearn.metrics import roc_auc_score, r2_score
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.metrics import roc_auc_score
 from scipy.stats import spearmanr
 import joblib
 import warnings
@@ -235,25 +233,6 @@ def main():
                  "accuracy": accuracy, "invasion_auc": inv_auc},
                 output_dir / "compartment_model.joblib")
     print(f"  Saved: compartment_model.joblib")
-
-    # Also save legacy binary invasion model for backwards compatibility
-    inv_binary_clf = Pipeline([
-        ("scaler", StandardScaler()),
-        ("clf", GradientBoostingClassifier(
-            n_estimators=n_est, max_depth=max_d, learning_rate=lr,
-            subsample=0.8, random_state=42
-        ))
-    ])
-    y_inv_binary = np.array([comp_dict.get(pid, "unknown") in INVASION_COMPARTMENTS
-                             for pid in ids
-                             if comp_dict.get(pid, "unknown") != "unknown"
-                             and pid in idx_map]).astype(int)
-    X_inv_binary = emb[[idx_map[pid] for pid in ids
-                        if comp_dict.get(pid, "unknown") != "unknown"
-                        and pid in idx_map]]
-    inv_binary_clf.fit(X_inv_binary, y_inv_binary)
-    joblib.dump(inv_binary_clf, output_dir / "invasion_model.joblib")
-    print(f"  Saved: invasion_model.joblib (legacy)")
 
     # ══════════════════════════════════════════════════════════════
     # REFERENCE DATABASE

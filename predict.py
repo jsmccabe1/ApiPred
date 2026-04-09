@@ -29,6 +29,8 @@ from pathlib import Path
 import warnings
 warnings.filterwarnings("ignore")
 
+__version__ = "1.1.0"
+
 VALID_AA = set("ACDEFGHIKLMNPQRSTVWY")
 INVASION_COMPARTMENTS = {
     "rhoptries 1", "rhoptries 2", "micronemes", "dense granules",
@@ -68,13 +70,9 @@ def classify_match_specificity(description):
 
 
 def load_esm2_model():
-    """Load ESM-2 650M model via the esm package."""
-    try:
-        import esm
-        model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
-    except ImportError:
-        model, alphabet = torch.hub.load("facebookresearch/esm:main",
-                                         "esm2_t33_650M_UR50D")
+    """Load ESM-2 650M model via the fair-esm package."""
+    import esm
+    model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
     model.eval()
     batch_converter = alphabet.get_batch_converter()
     return model, alphabet, batch_converter
@@ -86,109 +84,138 @@ def clean_sequence(seq):
     return "".join(c if c in VALID_AA else "X" for c in seq)
 
 
-def embed_batch(batch_seqs, model, alphabet, batch_converter, device="cpu",
-                layers=(20, 24, 28, 33), max_len=1022):
-    """Embed a batch of (id, seq) tuples. Returns dict of id -> embedding."""
-    results = {}
-    for seq_id, seq in batch_seqs:
-        seq = clean_sequence(seq)
-        if len(seq) == 0:
-            continue
+def _build_windows(sequences, max_len, overlap):
+    """
+    Split each sequence into ≤max_len windows with `overlap` residues of
+    overlap between adjacent windows. Returns:
+        parents: {sid: {"length": L, "residue_sum": None, "counts": zeros(L)}}
+        windows: list of (sid, start, end, window_seq), one entry per window
+        n_skipped: count of sequences too short to embed
+    """
+    parents = {}
+    windows = []
+    n_skipped = 0
+    stride = max_len - overlap
 
+    for sid, _, seq in sequences:
+        seq = clean_sequence(seq)
+        if len(seq) < 10:
+            n_skipped += 1
+            continue
+        parents[sid] = {"length": len(seq), "residue_sum": None,
+                        "counts": torch.zeros(len(seq))}
         if len(seq) <= max_len:
-            windows = [seq]
+            windows.append((sid, 0, len(seq), seq))
         else:
-            stride = max_len - 200
-            windows = []
-            for start in range(0, len(seq), stride):
-                end = min(start + max_len, len(seq))
-                windows.append(seq[start:end])
+            pos = 0
+            while pos < len(seq):
+                end = min(pos + max_len, len(seq))
+                windows.append((sid, pos, end, seq[pos:end]))
                 if end == len(seq):
                     break
+                pos += stride
 
-        all_reps = []
-        for window_seq in windows:
-            data = [("protein", window_seq)]
-            _, _, batch_tokens = batch_converter(data)
-            batch_tokens = batch_tokens.to(device)
-            with torch.no_grad():
-                out = model(batch_tokens, repr_layers=list(layers),
-                            return_contacts=False)
-            layer_reps = [out["representations"][l][0, 1:-1] for l in layers]
-            mean_rep = torch.stack(layer_reps).mean(dim=0)
-            all_reps.append(mean_rep.cpu())
+    return parents, windows, n_skipped
 
-        combined = torch.cat(all_reps, dim=0)
-        results[seq_id] = combined.mean(dim=0).numpy()
-    return results
+
+def _process_window_batch(batch, parents, model, batch_converter, device,
+                          layers):
+    """Run one true batched ESM-2 forward pass over `batch` windows.
+
+    Each window's per-residue embedding (mean across the 4 layers) is added
+    to the residue_sum of its parent protein at positions [start:end], with
+    counts incremented so overlap regions get averaged correctly later.
+    """
+    data = [(f"w{j}", w[3]) for j, w in enumerate(batch)]
+    _, _, batch_tokens = batch_converter(data)
+    batch_tokens = batch_tokens.to(device)
+
+    with torch.no_grad():
+        out = model(batch_tokens, repr_layers=list(layers),
+                    return_contacts=False)
+
+    # (n_layers, batch, max_tokens, dim) -> mean over layers -> (batch, max_tokens, dim)
+    mean_rep = torch.stack([out["representations"][l] for l in layers]).mean(dim=0).cpu()
+
+    for j, (sid, start, end, win_seq) in enumerate(batch):
+        win_len = len(win_seq)
+        # Tokens [1, 1+win_len) are the actual residues (BOS at 0, EOS at 1+win_len)
+        win_emb = mean_rep[j, 1:win_len + 1, :]
+        info = parents[sid]
+        if info["residue_sum"] is None:
+            info["residue_sum"] = torch.zeros(info["length"], win_emb.shape[1])
+        info["residue_sum"][start:end] += win_emb
+        info["counts"][start:end] += 1
 
 
 def embed_proteome(sequences, model, alphabet, batch_converter,
-                   device="cpu", batch_size=8):
-    """Embed all sequences with batched processing and progress reporting."""
-    # Sort by length for efficient GPU batching (similar lengths together)
-    indexed = [(i, sid, seq) for i, (sid, _, seq) in enumerate(sequences)]
-    indexed.sort(key=lambda x: len(x[2]))
+                   device="cpu", batch_size=8, layers=(20, 24, 28, 33),
+                   max_len=1022, overlap=200):
+    """Embed all sequences with true batched ESM-2 inference.
+
+    Windows from all proteins are pooled, sorted by length (so similar-length
+    windows batch together with minimal padding waste), then processed in true
+    GPU batches. Per-residue overlap regions are averaged before the final
+    residue mean, matching the training pipeline at
+    Apicomplexa/scripts/01_generate_embeddings.py.
+
+    Falls back to a smaller batch_size on OOM, halving until it fits or until
+    a single window OOMs (in which case that protein is dropped).
+    """
+    parents, windows, n_skipped = _build_windows(sequences, max_len, overlap)
+    n_total = len(parents)
+    n_total_windows = len(windows)
+
+    # Sort windows by length so each batch has similar-length sequences
+    # (less padding -> faster + less memory).
+    windows.sort(key=lambda w: len(w[3]))
 
     embeddings = {}
-    n_total = len(indexed)
-    n_done = 0
-    n_failed = 0
+    n_failed = n_skipped
+    cur_batch = batch_size
     t0 = time.time()
+    i = 0
+    n_done = 0
 
-    # Process in batches
-    batch = []
-    for _, sid, seq in indexed:
-        if len(seq) < 10:
+    while i < len(windows):
+        batch = windows[i:i + cur_batch]
+        try:
+            _process_window_batch(batch, parents, model, batch_converter,
+                                  device, layers)
+        except RuntimeError as e:
+            msg = str(e).lower()
+            is_oom = "out of memory" in msg or "cuda" in msg
+            if device == "cuda":
+                torch.cuda.empty_cache()
+            if is_oom and cur_batch > 1:
+                cur_batch = max(1, cur_batch // 2)
+                continue
+            # Single-window failure: drop that protein and move on
+            sid = batch[0][0]
+            parents.pop(sid, None)
+            n_failed += 1
+            i += 1
+            continue
+
+        i += len(batch)
+        n_done += len(batch)
+        elapsed = time.time() - t0
+        rate = n_done / elapsed if elapsed > 0 else 0
+        eta = (n_total_windows - n_done) / rate if rate > 0 else 0
+        print(f"\r  [{n_done}/{n_total_windows} windows, batch={cur_batch}] "
+              f"{rate:.1f} win/s ETA {eta:.0f}s", end="", flush=True)
+
+    # Aggregate per-protein: average overlap regions then take residue mean
+    for sid, info in parents.items():
+        if info["residue_sum"] is None:
             n_failed += 1
             continue
-        batch.append((sid, seq))
-
-        if len(batch) >= batch_size:
-            try:
-                batch_embs = embed_batch(batch, model, alphabet,
-                                         batch_converter, device)
-                embeddings.update(batch_embs)
-            except RuntimeError:
-                # OOM - fall back to one at a time
-                torch.cuda.empty_cache() if device == "cuda" else None
-                for item in batch:
-                    try:
-                        single_emb = embed_batch([item], model, alphabet,
-                                                 batch_converter, device)
-                        embeddings.update(single_emb)
-                    except RuntimeError:
-                        n_failed += 1
-                        torch.cuda.empty_cache() if device == "cuda" else None
-            n_done += len(batch)
-            batch = []
-
-            elapsed = time.time() - t0
-            rate = n_done / elapsed if elapsed > 0 else 0
-            eta = (n_total - n_done) / rate if rate > 0 else 0
-            print(f"\r  [{n_done}/{n_total}] {rate:.1f} seq/s "
-                  f"ETA {eta:.0f}s | embedded: {len(embeddings)}", end="",
-                  flush=True)
-
-    # Process remainder
-    if batch:
-        try:
-            batch_embs = embed_batch(batch, model, alphabet,
-                                     batch_converter, device)
-            embeddings.update(batch_embs)
-        except RuntimeError:
-            torch.cuda.empty_cache() if device == "cuda" else None
-            for item in batch:
-                try:
-                    single_emb = embed_batch([item], model, alphabet,
-                                             batch_converter, device)
-                    embeddings.update(single_emb)
-                except RuntimeError:
-                    n_failed += 1
+        residue_emb = info["residue_sum"] / info["counts"].unsqueeze(1).clamp(min=1)
+        embeddings[sid] = residue_emb.mean(dim=0).numpy()
 
     elapsed = time.time() - t0
     print(f"\r  Embedded {len(embeddings)}/{n_total} proteins "
-          f"in {elapsed:.1f}s ({n_failed} failed)     ")
+          f"in {elapsed:.1f}s ({n_failed} failed)         ")
     return embeddings
 
 
@@ -242,6 +269,8 @@ def main():
                         help="Batch size for embedding (default: 8)")
     parser.add_argument("--model-dir", default=None,
                         help="Directory containing pre-trained models")
+    parser.add_argument("--version", action="version",
+                        version=f"ApiPred {__version__}")
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -249,19 +278,13 @@ def main():
 
     essentiality_path = model_dir / "essentiality_ensemble.joblib"
     compartment_path = model_dir / "compartment_model.joblib"
-    invasion_path = model_dir / "invasion_model.joblib"
     reference_path = model_dir / "reference_db.npz"
-
-    # Backwards compatibility: check for old model names
-    if not essentiality_path.exists() and (model_dir / "essentiality_model.joblib").exists():
-        essentiality_path = model_dir / "essentiality_model.joblib"
 
     has_essentiality = essentiality_path.exists()
     has_compartment = compartment_path.exists()
-    has_invasion = invasion_path.exists()
     has_reference = reference_path.exists()
 
-    if not any([has_essentiality, has_compartment, has_invasion]):
+    if not any([has_essentiality, has_compartment]):
         print(f"No pre-trained models found in {model_dir}/")
         print(f"Run: python train_model.py --data-dir /path/to/Apicomplexa/")
         print(f"Proceeding with embedding + structural context only...\n")
@@ -298,31 +321,19 @@ def main():
         print("Loading essentiality model...")
         ess_data = joblib.load(essentiality_path)
 
-        if "ensemble" in ess_data:
-            # New ensemble format
-            ensemble_preds = []
-            ensemble_probs = []
-            for fold_model in ess_data["ensemble"]:
-                reg = fold_model["regressor"]
-                clf = fold_model["classifier"]
-                ensemble_preds.append(reg.predict(X))
-                ensemble_probs.append(clf.predict_proba(X)[:, 1])
+        ensemble_preds = []
+        ensemble_probs = []
+        for fold_model in ess_data["ensemble"]:
+            ensemble_preds.append(fold_model["regressor"].predict(X))
+            ensemble_probs.append(fold_model["classifier"].predict_proba(X)[:, 1])
 
-            predicted_scores = np.mean(ensemble_preds, axis=0)
-            score_std = np.std(ensemble_preds, axis=0)
-            essential_probs = np.mean(ensemble_probs, axis=0)
-            prob_std = np.std(ensemble_probs, axis=0)
-        else:
-            # Old single-model format (backwards compatible)
-            predicted_scores = ess_data["regressor"].predict(X)
-            score_std = np.full(len(X), np.nan)
-            essential_probs = ess_data["classifier"].predict_proba(X)[:, 1]
-            prob_std = np.full(len(X), np.nan)
+        predicted_scores = np.mean(ensemble_preds, axis=0)
+        score_std = np.std(ensemble_preds, axis=0)
+        essential_probs = np.mean(ensemble_probs, axis=0)
     else:
         predicted_scores = np.full(len(X), np.nan)
         score_std = np.full(len(X), np.nan)
         essential_probs = np.full(len(X), np.nan)
-        prob_std = np.full(len(X), np.nan)
 
     # ─── Compartment prediction (multi-class) ───
     if has_compartment:
@@ -339,13 +350,6 @@ def main():
         # Invasion probability = sum of invasion compartment probabilities
         inv_mask = np.array([c in INVASION_COMPARTMENTS for c in comp_classes])
         inv_probs = comp_probs_all[:, inv_mask].sum(axis=1)
-    elif has_invasion:
-        import joblib
-        print("Loading invasion model (legacy)...")
-        inv_model = joblib.load(invasion_path)
-        inv_probs = inv_model.predict_proba(X)[:, 1]
-        predicted_compartments = np.where(inv_probs > 0.5, "invasion", "non-invasion")
-        comp_confidence = np.abs(inv_probs - 0.5) * 2
     else:
         inv_probs = np.full(len(X), np.nan)
         predicted_compartments = np.full(len(X), "", dtype=object)
@@ -492,14 +496,13 @@ def main():
         print(f"  Predicted essential:   {n_ess}")
         print(f"  Predicted important:   {n_imp}")
         print(f"  High-confidence calls: {n_hi}")
-    if has_compartment or has_invasion:
+    if has_compartment:
         n_inv = (df["predicted_invasion"] == "yes").sum()
         n_specific = (df.get("invasion_specific") == "yes").sum()
         n_conserved = (df.get("invasion_specific") == "conserved_match").sum()
         print(f"  Predicted invasion (all):       {n_inv}")
         print(f"    Parasite-specific matches:    {n_specific}")
         print(f"    Conserved alveolate matches:  {n_conserved}")
-    if has_compartment:
         top_comps = df["predicted_compartment"].value_counts().head(5)
         print(f"  Top predicted compartments:")
         for comp, n in top_comps.items():
