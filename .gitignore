@@ -28,3 +28,7 @@ output/
 *.log
 scratch/
 tmp/
+
+# Local panel config with absolute paths
+tools/panel_default.json
+tools/panel_local*.json

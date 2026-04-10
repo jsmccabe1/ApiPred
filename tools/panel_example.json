@@ -1,0 +1,59 @@
+[
+    {
+        "_comment": "Copy this file and edit the paths to point at the proteomes on your system. Each entry needs name (short identifier), path (absolute or relative FASTA path), and category (apicomplexan or background). The apicomplexan entries define the positive-control distribution (real invasion machinery); the background entries define the free-living baseline (no invasion). A good panel has at least 3 apicomplexan and 3 background proteomes."
+    },
+    {
+        "name": "Toxoplasma_gondii",
+        "path": "/PATH/TO/Toxoplasma_gondii.fasta",
+        "category": "apicomplexan",
+        "notes": "Gold standard apicomplexan with classical invasion machinery. Source of training data."
+    },
+    {
+        "name": "Plasmodium_falciparum",
+        "path": "/PATH/TO/Plasmodium_falciparum.fasta",
+        "category": "apicomplexan",
+        "notes": "Haematozoan; close apicomplexan with distinct AMA/RON complex."
+    },
+    {
+        "name": "Cryptosporidium_parvum",
+        "path": "/PATH/TO/Cryptosporidium_parvum.fasta",
+        "category": "apicomplexan",
+        "notes": "Reduced apicomplexan lineage; fewer compartments but retains core invasion."
+    },
+    {
+        "name": "Eimeria_tenella",
+        "path": "/PATH/TO/Eimeria_tenella.fasta",
+        "category": "apicomplexan",
+        "notes": "Coccidian relative of Toxoplasma."
+    },
+    {
+        "name": "Babesia_microti",
+        "path": "/PATH/TO/Babesia_microti.fasta",
+        "category": "apicomplexan",
+        "notes": "Piroplasm; intracellular apicomplexan with reduced invasion machinery."
+    },
+    {
+        "name": "Chromera_velia",
+        "path": "/PATH/TO/Chromera_velia.fasta",
+        "category": "background",
+        "notes": "Free-living photosynthetic chrompodellid. Sister lineage to Apicomplexa, has conoid but no invasion machinery."
+    },
+    {
+        "name": "Vitrella_brassicaformis",
+        "path": "/PATH/TO/Vitrella_brassicaformis.fasta",
+        "category": "background",
+        "notes": "Free-living chrompodellid; close outgroup to Apicomplexa."
+    },
+    {
+        "name": "Voromonas_pontica",
+        "path": "/PATH/TO/Voromonas_pontica.fasta",
+        "category": "background",
+        "notes": "Predatory chrompodellid; has an invasion-like feeding apparatus but not an apicomplexan-style one."
+    },
+    {
+        "name": "Tetrahymena_thermophila",
+        "path": "/PATH/TO/Tetrahymena_thermophila.fasta",
+        "category": "background",
+        "notes": "Ciliate. Distant alveolate, free-living, no invasion machinery. Should look like biological background for invasion prediction."
+    }
+]
