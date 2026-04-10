@@ -1,0 +1,10 @@
+name	category	n_proteins	n_invasion_calls	median_inv	q99_inv
+Toxoplasma_gondii	apicomplexan	8318	865	0.114	0.824
+Plasmodium_falciparum	apicomplexan	5392	164	0.147	0.5864500000000007
+Cryptosporidium_parvum	apicomplexan	3805	365	0.151	0.70892
+Eimeria_tenella	apicomplexan	8609	270	0.144	0.62792
+Babesia_microti	apicomplexan	3601	165	0.117	0.664
+Chromera_velia	background	31799	1094	0.189	0.607
+Vitrella_brassicaformis	background	23034	1194	0.198	0.6266699999999983
+Voromonas_pontica	background	9833	61	0.139	0.459
+Tetrahymena_thermophila	background	26996	162	0.201	0.475

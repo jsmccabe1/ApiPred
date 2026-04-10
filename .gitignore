@@ -13,9 +13,10 @@ build/
 .DS_Store
 Thumbs.db
 
-# Generated outputs (examples/ stays tracked)
+# Generated outputs (examples/, models/, panel/ stay tracked)
 *.tsv
 !examples/*.tsv
+!panel/*.tsv
 *.npz
 !models/*.npz
 *.npy
